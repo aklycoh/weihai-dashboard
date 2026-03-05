@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 
 cd /d "%~dp0"
 
@@ -20,6 +20,21 @@ if not exist "node_modules" (
   )
 )
 
+set "PORT_PID="
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":5173 .*LISTENING"') do (
+  set "PORT_PID=%%P"
+  goto :port_check_done
+)
+:port_check_done
+
+if defined PORT_PID (
+  echo [INFO] Port 5173 is already in use by PID !PORT_PID!.
+  echo [INFO] Dev server may already be running. Opening browser only.
+  start "" "http://127.0.0.1:5173"
+  pause
+  exit /b 0
+)
+
 echo [INFO] Starting dev server in a new terminal window...
 start "Weihai Dashboard Dev Server" cmd /k "cd /d ""%~dp0"" && npm run dev"
 if errorlevel 1 (
@@ -28,9 +43,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [INFO] Waiting 5 seconds, then opening browser...
-timeout /t 5 /nobreak >nul
-start "" "http://localhost:5173"
+echo [INFO] Waiting 8 seconds, then opening browser...
+timeout /t 8 /nobreak >nul
+start "" "http://127.0.0.1:5173"
 
 echo [INFO] Browser open requested. Dev server is running in another window.
 echo [INFO] Close that server window or press Ctrl+C there to stop it.

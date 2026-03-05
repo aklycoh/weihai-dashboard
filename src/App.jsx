@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell, AreaChart, Area
@@ -50,6 +50,22 @@ const defaultDateData = [
 ];
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#f97316'];
+const STORAGE_KEYS = {
+  planData: 'weihai-dashboard.planData',
+  dateData: 'weihai-dashboard.dateData'
+};
+
+const loadPersistedArray = (key, fallback) => {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+};
 
 // 升级版 CSV 解析器：完美处理带引号和内部标点的复杂字段
 const parseCSV = (csvText) => {
@@ -94,10 +110,18 @@ const parseCSV = (csvText) => {
 };
 
 export default function App() {
-  const [planData, setPlanData] = useState(defaultPlanData);
-  const [dateData, setDateData] = useState(defaultDateData);
+  const [planData, setPlanData] = useState(() => loadPersistedArray(STORAGE_KEYS.planData, defaultPlanData));
+  const [dateData, setDateData] = useState(() => loadPersistedArray(STORAGE_KEYS.dateData, defaultDateData));
   const [isUploading, setIsUploading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_KEYS.planData, JSON.stringify(planData));
+  }, [planData]);
+
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_KEYS.dateData, JSON.stringify(dateData));
+  }, [dateData]);
 
   // 动态加载外部脚本用于导出
   const loadScript = (src) => {
