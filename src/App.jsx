@@ -125,7 +125,7 @@ const parseCSV = (csvText) => {
   const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== '');
   if (lines.length === 0) return [];
 
-  // 解析单行 CSV 的辅助函数，处理引号内的逗号
+  // 解析单行 CSV 的辅助函数，处理引号内的逗号和 "" 转义
   const parseLine = (line) => {
     const values = [];
     let inQuotes = false;
@@ -133,7 +133,12 @@ const parseCSV = (csvText) => {
     for (let i = 0; i < line.length; i++) {
       const char = line[i];
       if (char === '"') {
-        inQuotes = !inQuotes;
+        if (inQuotes && i + 1 < line.length && line[i + 1] === '"') {
+          currentValue += '"';
+          i++; // 跳过第二个引号
+        } else {
+          inQuotes = !inQuotes;
+        }
       } else if (char === ',' && !inQuotes) {
         values.push(currentValue);
         currentValue = '';
@@ -162,6 +167,35 @@ const parseCSV = (csvText) => {
   });
 };
 
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    const tooltipLabel = (() => {
+      const firstRow = payload[0]?.payload;
+      if (firstRow?.weekLabel) return firstRow.weekLabel;
+      if (firstRow?.date) return firstRow.date;
+      if (typeof label === 'number' && Number.isFinite(label)) {
+        const dateObj = new Date(label);
+        if (!Number.isNaN(dateObj.getTime())) {
+          return toDateKey(dateObj);
+        }
+      }
+      return label;
+    })();
+
+    return (
+      <div className="bg-white p-3 border border-slate-200 shadow-lg rounded-lg">
+        <p className="font-semibold text-slate-800 mb-2">{tooltipLabel}</p>
+        {payload.map((entry, index) => (
+          <p key={index} className="text-sm" style={{ color: entry.color }}>
+            {entry.name}: {entry.value} {entry.name.includes('比例') || entry.name.includes('率') ? '%' : '户'}
+          </p>
+        ))}
+      </div>
+    );
+  }
+  return null;
+};
+
 export default function App() {
   const [planData, setPlanData] = useState(() => loadPersistedArray(STORAGE_KEYS.planData, defaultPlanData));
   const [dateData, setDateData] = useState(() => loadPersistedArray(STORAGE_KEYS.dateData, defaultDateData));
@@ -176,19 +210,14 @@ export default function App() {
     window.localStorage.setItem(STORAGE_KEYS.dateData, JSON.stringify(dateData));
   }, [dateData]);
 
-  // 动态加载外部脚本用于导出
-  const loadScript = (src) => {
-    return new Promise((resolve, reject) => {
-      if (document.querySelector(`script[src="${src}"]`)) {
-        resolve();
-        return;
-      }
-      const script = document.createElement('script');
-      script.src = src;
-      script.crossOrigin = 'anonymous';
-      script.onload = resolve;
-      script.onerror = reject;
-      document.head.appendChild(script);
+  const captureElement = async () => {
+    const html2canvas = (await import('html2canvas')).default;
+    const element = document.getElementById('dashboard-export-area');
+    return html2canvas(element, {
+      scale: 2,
+      useCORS: true,
+      backgroundColor: '#f8fafc',
+      ignoreElements: (el) => el.classList.contains('no-export')
     });
   };
 
@@ -196,20 +225,10 @@ export default function App() {
   const exportToPNG = async () => {
     try {
       setIsExporting(true);
-      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
-
-      const element = document.getElementById('dashboard-export-area');
-      const canvas = await window.html2canvas(element, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: '#f8fafc', // 对应背景色 bg-slate-50
-        ignoreElements: (el) => el.classList.contains('no-export') // 忽略操作按钮
-      });
-
-      const imgData = canvas.toDataURL('image/png');
+      const canvas = await captureElement();
       const link = document.createElement('a');
       link.download = `威海分行授信上报仪表盘_${new Date().toISOString().slice(0,10)}.png`;
-      link.href = imgData;
+      link.href = canvas.toDataURL('image/png');
       link.click();
     } catch (error) {
       console.error('导出PNG失败:', error);
@@ -218,30 +237,34 @@ export default function App() {
     }
   };
 
-  // 导出为 PDF
+  // 导出为 PDF（支持多页）
   const exportToPDF = async () => {
     try {
       setIsExporting(true);
-      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
-      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
-
-      const element = document.getElementById('dashboard-export-area');
-      const canvas = await window.html2canvas(element, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: '#f8fafc',
-        ignoreElements: (el) => el.classList.contains('no-export')
-      });
+      const [canvas, { jsPDF }] = await Promise.all([
+        captureElement(),
+        import('jspdf')
+      ]);
 
       const imgData = canvas.toDataURL('image/png');
-      const { jsPDF } = window.jspdf;
       const pdf = new jsPDF('p', 'mm', 'a4');
-
-      // 按照A4纸比例缩放图片
       const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      const pdfPageHeight = pdf.internal.pageSize.getHeight();
+      const imgHeight = (canvas.height * pdfWidth) / canvas.width;
 
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
+      heightLeft -= pdfPageHeight;
+
+      while (heightLeft > 0) {
+        position -= pdfPageHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, imgHeight);
+        heightLeft -= pdfPageHeight;
+      }
+
       pdf.save(`威海分行授信上报仪表盘_${new Date().toISOString().slice(0,10)}.pdf`);
     } catch (error) {
       console.error('导出PDF失败:', error);
@@ -261,10 +284,24 @@ export default function App() {
       const text = event.target.result;
       const parsed = parseCSV(text);
       if (type === 'plan') {
+        if (parsed.length > 0 && !parsed[0]['机构名称']) {
+          alert('Plan CSV 缺少"机构名称"列，请检查文件格式');
+          setIsUploading(false);
+          return;
+        }
         setPlanData(parsed);
       } else {
+        if (parsed.length > 0 && !parsed[0]['上报日期']) {
+          alert('Date CSV 缺少"上报日期"列，请检查文件格式');
+          setIsUploading(false);
+          return;
+        }
         setDateData(parsed);
       }
+      setIsUploading(false);
+    };
+    reader.onerror = () => {
+      console.error('文件读取失败');
       setIsUploading(false);
     };
     reader.readAsText(file);
@@ -334,7 +371,8 @@ export default function App() {
     const weeklyTrend = Object.keys(weeklyTrendMap)
       .sort()
       .map(weekKey => {
-        const weekStartDate = new Date(`${weekKey}T00:00:00`);
+        const [y, m, d] = weekKey.split('-').map(Number);
+        const weekStartDate = new Date(y, m - 1, d);
         const weekEndDate = getWeekEndDate(weekStartDate);
         return {
           weekStart: weekKey,
@@ -346,7 +384,7 @@ export default function App() {
 
     // X 轴刻度仍按月显示（每个月仅一个标签）
     const monthTicks = Array.from(new Set(weeklyTrend.map(item => item.weekStart.slice(0, 7))))
-      .map(monthKey => new Date(`${monthKey}-01T00:00:00`).getTime())
+      .map(monthKey => { const [y, m] = monthKey.split('-').map(Number); return new Date(y, m - 1, 1).getTime(); })
       .sort((a, b) => a - b);
 
     // 计算整体完成率
@@ -364,36 +402,6 @@ export default function App() {
   }, [planData, dateData]);
 
   const { totalPlanned, totalActual, totalRate, branchStats, weeklyTrend, monthTicks, recentReports } = dashboardData;
-
-  // 渲染自定义 Tooltip 以显示百分比
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      const tooltipLabel = (() => {
-        const firstRow = payload[0]?.payload;
-        if (firstRow?.weekLabel) return firstRow.weekLabel;
-        if (firstRow?.date) return firstRow.date;
-        if (typeof label === 'number' && Number.isFinite(label)) {
-          const dateObj = new Date(label);
-          if (!Number.isNaN(dateObj.getTime())) {
-            return toDateKey(dateObj);
-          }
-        }
-        return label;
-      })();
-
-      return (
-        <div className="bg-white p-3 border border-slate-200 shadow-lg rounded-lg">
-          <p className="font-semibold text-slate-800 mb-2">{tooltipLabel}</p>
-          {payload.map((entry, index) => (
-            <p key={index} className="text-sm" style={{ color: entry.color }}>
-              {entry.name}: {entry.value} {entry.name.includes('比例') || entry.name.includes('率') ? '%' : '户'}
-            </p>
-          ))}
-        </div>
-      );
-    }
-    return null;
-  };
 
   return (
     <div id="dashboard-export-area" className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-800">
