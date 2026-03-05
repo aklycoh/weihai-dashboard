@@ -67,6 +67,59 @@ const loadPersistedArray = (key, fallback) => {
   }
 };
 
+const toDateKey = (dateObj) => {
+  const year = dateObj.getFullYear();
+  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getWeekStartDate = (dateObj) => {
+  const start = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+  const day = start.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  start.setDate(start.getDate() + diffToMonday);
+  return start;
+};
+
+const getWeekEndDate = (weekStartDate) => {
+  const end = new Date(weekStartDate.getFullYear(), weekStartDate.getMonth(), weekStartDate.getDate());
+  end.setDate(end.getDate() + 6);
+  return end;
+};
+
+const parseReportDate = (dateStr) => {
+  if (!dateStr) return null;
+  const raw = String(dateStr).trim();
+  if (!raw) return null;
+
+  const normalized = raw
+    .replace(/年/g, '-')
+    .replace(/月/g, '-')
+    .replace(/日/g, '')
+    .replace(/\//g, '-')
+    .replace(/\./g, '-');
+
+  const ymdMatch = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (ymdMatch) {
+    const year = Number(ymdMatch[1]);
+    const month = Number(ymdMatch[2]);
+    const day = Number(ymdMatch[3]);
+    const dateObj = new Date(year, month - 1, day);
+    if (
+      dateObj.getFullYear() === year &&
+      dateObj.getMonth() === month - 1 &&
+      dateObj.getDate() === day
+    ) {
+      return dateObj;
+    }
+    return null;
+  }
+
+  const fallback = new Date(raw);
+  return Number.isNaN(fallback.getTime()) ? null : fallback;
+};
+
 // 升级版 CSV 解析器：完美处理带引号和内部标点的复杂字段
 const parseCSV = (csvText) => {
   const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== '');
@@ -234,13 +287,19 @@ export default function App() {
 
     // 2. 实际上报统计
     let totalActual = 0;
-    const monthlyTrendMap = {};
+    const weeklyTrendMap = {};
 
     // 过滤掉没有日期的脏数据
     const validDateData = dateData.filter(d => d['上报日期'] && d['上报日期'].trim() !== '');
 
     // 按日期排序用于明细表
-    const sortedDateData = [...validDateData].sort((a, b) => new Date(b['上报日期']) - new Date(a['上报日期']));
+    const sortedDateData = [...validDateData].sort((a, b) => {
+      const dateA = parseReportDate(a['上报日期']);
+      const dateB = parseReportDate(b['上报日期']);
+      const timeA = dateA ? dateA.getTime() : -Infinity;
+      const timeB = dateB ? dateB.getTime() : -Infinity;
+      return timeB - timeA;
+    });
 
     validDateData.forEach(row => {
       const branch = row['机构名称'];
@@ -251,23 +310,13 @@ export default function App() {
         totalActual += 1;
       }
 
-      // 月度趋势（只统计存在的月份）
+      // 趋势统计按“周”聚合，周一到周日
       if (dateStr) {
-        let monthStr = null;
-        // 提取月份，兼容 YYYY-MM-DD 或 YYYY/M/D 等各种带或不带0的格式
-        const match = dateStr.match(/\d{4}[-/年](\d{1,2})/);
-        if (match) {
-          monthStr = match[1].padStart(2, '0'); // 统一补齐为两位数确保排序正确
-        } else {
-          // 兜底方案：使用原生 Date 解析（处理 MM/DD/YYYY 等其他异常格式）
-          const d = new Date(dateStr);
-          if (!isNaN(d.getTime())) {
-            monthStr = String(d.getMonth() + 1).padStart(2, '0');
-          }
-        }
-
-        if (monthStr) {
-          monthlyTrendMap[monthStr] = (monthlyTrendMap[monthStr] || 0) + 1;
+        const reportDate = parseReportDate(dateStr);
+        if (reportDate) {
+          const weekStart = getWeekStartDate(reportDate);
+          const weekKey = toDateKey(weekStart);
+          weeklyTrendMap[weekKey] = (weeklyTrendMap[weekKey] || 0) + 1;
         }
       }
     });
@@ -281,13 +330,24 @@ export default function App() {
       };
     }).sort((a, b) => b.rate - a.rate);
 
-    // 月度趋势数据转换为数组并排序，格式化为 "X月"
-    const monthlyTrend = Object.keys(monthlyTrendMap)
+    // 周度趋势数据转换为数组并排序
+    const weeklyTrend = Object.keys(weeklyTrendMap)
       .sort()
-      .map(month => ({
-        month: `${parseInt(month, 10)}月`,
-        count: monthlyTrendMap[month]
-      }));
+      .map(weekKey => {
+        const weekStartDate = new Date(`${weekKey}T00:00:00`);
+        const weekEndDate = getWeekEndDate(weekStartDate);
+        return {
+          weekStart: weekKey,
+          weekLabel: `${weekKey} ~ ${toDateKey(weekEndDate)}`,
+          timestamp: weekStartDate.getTime(),
+          count: weeklyTrendMap[weekKey]
+        };
+      });
+
+    // X 轴刻度仍按月显示（每个月仅一个标签）
+    const monthTicks = Array.from(new Set(weeklyTrend.map(item => item.weekStart.slice(0, 7))))
+      .map(monthKey => new Date(`${monthKey}-01T00:00:00`).getTime())
+      .sort((a, b) => a - b);
 
     // 计算整体完成率
     const totalRate = totalPlanned > 0 ? ((totalActual / totalPlanned) * 100).toFixed(1) : 0;
@@ -297,19 +357,33 @@ export default function App() {
       totalActual,
       totalRate,
       branchStats,
-      monthlyTrend,
+      weeklyTrend,
+      monthTicks,
       recentReports: sortedDateData
     };
   }, [planData, dateData]);
 
-  const { totalPlanned, totalActual, totalRate, branchStats, monthlyTrend, recentReports } = dashboardData;
+  const { totalPlanned, totalActual, totalRate, branchStats, weeklyTrend, monthTicks, recentReports } = dashboardData;
 
   // 渲染自定义 Tooltip 以显示百分比
   const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
+      const tooltipLabel = (() => {
+        const firstRow = payload[0]?.payload;
+        if (firstRow?.weekLabel) return firstRow.weekLabel;
+        if (firstRow?.date) return firstRow.date;
+        if (typeof label === 'number' && Number.isFinite(label)) {
+          const dateObj = new Date(label);
+          if (!Number.isNaN(dateObj.getTime())) {
+            return toDateKey(dateObj);
+          }
+        }
+        return label;
+      })();
+
       return (
         <div className="bg-white p-3 border border-slate-200 shadow-lg rounded-lg">
-          <p className="font-semibold text-slate-800 mb-2">{label}</p>
+          <p className="font-semibold text-slate-800 mb-2">{tooltipLabel}</p>
           {payload.map((entry, index) => (
             <p key={index} className="text-sm" style={{ color: entry.color }}>
               {entry.name}: {entry.value} {entry.name.includes('比例') || entry.name.includes('率') ? '%' : '户'}
@@ -394,7 +468,7 @@ export default function App() {
 
         {/* KPI 卡片组 */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center gap-4">
+          <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_8px_20px_rgba(15,23,42,0.06)] transition-shadow duration-300 hover:shadow-[0_14px_30px_rgba(15,23,42,0.10)] flex items-center gap-4">
             <div className="h-14 w-14 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
               <Target size={28} />
             </div>
@@ -404,7 +478,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center gap-4">
+          <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_8px_20px_rgba(15,23,42,0.06)] transition-shadow duration-300 hover:shadow-[0_14px_30px_rgba(15,23,42,0.10)] flex items-center gap-4">
             <div className="h-14 w-14 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
               <CheckCircle size={28} />
             </div>
@@ -414,7 +488,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center gap-4">
+          <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_8px_20px_rgba(15,23,42,0.06)] transition-shadow duration-300 hover:shadow-[0_14px_30px_rgba(15,23,42,0.10)] flex items-center gap-4">
             <div className="h-14 w-14 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
               <Percent size={28} />
             </div>
@@ -431,7 +505,7 @@ export default function App() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
           {/* 机构完成情况 - 柱状图 */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 lg:col-span-2">
+          <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_10px_26px_rgba(15,23,42,0.07)] transition-shadow duration-300 hover:shadow-[0_16px_34px_rgba(15,23,42,0.11)] lg:col-span-2">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                 <BarChart2 className="text-blue-500" size={20} />
@@ -456,7 +530,7 @@ export default function App() {
           </div>
 
           {/* 机构占比 - 环形图 */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+          <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_10px_26px_rgba(15,23,42,0.07)] transition-shadow duration-300 hover:shadow-[0_16px_34px_rgba(15,23,42,0.11)]">
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-2">
               <Percent className="text-blue-500" size={20} />
               已上报机构分布占比
@@ -493,14 +567,14 @@ export default function App() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
           {/* 上报趋势 - 面积折线图 */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
+          <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_10px_26px_rgba(15,23,42,0.07)] transition-shadow duration-300 hover:shadow-[0_16px_34px_rgba(15,23,42,0.11)]">
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-6">
               <TrendingUp className="text-blue-500" size={20} />
               2026年上报数量趋势
             </h3>
             <div className="h-64 w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={monthlyTrend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <AreaChart data={weeklyTrend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                   <defs>
                     <linearGradient id="colorCount" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
@@ -508,7 +582,17 @@ export default function App() {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#64748b' }} dy={10} />
+                  <XAxis
+                    dataKey="timestamp"
+                    type="number"
+                    domain={['dataMin', 'dataMax']}
+                    ticks={monthTicks}
+                    tickFormatter={(value) => `${new Date(value).getMonth() + 1}月`}
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: '#64748b' }}
+                    dy={10}
+                  />
                   <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b' }} />
                   <Tooltip content={<CustomTooltip />} />
                   <Area
@@ -528,7 +612,7 @@ export default function App() {
           </div>
 
           {/* 最新上报明细表 */}
-          <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex flex-col h-[350px]">
+          <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_10px_26px_rgba(15,23,42,0.07)] transition-shadow duration-300 hover:shadow-[0_16px_34px_rgba(15,23,42,0.11)] flex flex-col h-[350px]">
             <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-4 shrink-0">
               <FileSpreadsheet className="text-blue-500" size={20} />
               近期客户上报明细
