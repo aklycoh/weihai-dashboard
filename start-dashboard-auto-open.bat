@@ -1,0 +1,38 @@
+@echo off
+setlocal
+
+cd /d "%~dp0"
+
+where npm >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] npm was not found. Please install Node.js LTS first.
+  pause
+  exit /b 1
+)
+
+if not exist "node_modules" (
+  echo [INFO] node_modules not found. Installing dependencies...
+  call npm install
+  if errorlevel 1 (
+    echo [ERROR] Failed to install dependencies.
+    pause
+    exit /b 1
+  )
+)
+
+echo [INFO] Starting dev server in a new terminal window...
+start "Weihai Dashboard Dev Server" cmd /k "cd /d ""%~dp0"" && npm run dev"
+if errorlevel 1 (
+  echo [ERROR] Failed to start the dev server window.
+  pause
+  exit /b 1
+)
+
+echo [INFO] Waiting 5 seconds, then opening browser...
+timeout /t 5 /nobreak >nul
+start "" "http://localhost:5173"
+
+echo [INFO] Browser open requested. Dev server is running in another window.
+echo [INFO] Close that server window or press Ctrl+C there to stop it.
+pause
+exit /b 0
