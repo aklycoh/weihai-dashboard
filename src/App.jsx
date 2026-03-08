@@ -1,10 +1,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  PieChart, Pie, Cell, AreaChart, Area
+  PieChart, Pie, Cell, AreaChart, Area, LineChart
 } from 'recharts';
 import {
-  Upload, CheckCircle, Target, Percent, TrendingUp, Building2, Calendar, FileSpreadsheet, Download, BarChart2
+  Upload, CheckCircle, Target, Percent, TrendingUp, Building2, Calendar, Download, BarChart2
 } from 'lucide-react';
 
 // --- 初始演示数据（基于用户提供的片段） ---
@@ -54,6 +54,15 @@ const STORAGE_KEYS = {
   planData: 'weihai-dashboard.planData',
   dateData: 'weihai-dashboard.dateData'
 };
+const DASHBOARD_YEAR = 2026;
+const PLAN_PROGRESS_MILESTONES = [
+  { month: 2, rate: 10 },
+  { month: 3, rate: 20 },
+  { month: 4, rate: 40 },
+  { month: 5, rate: 60 },
+  { month: 6, rate: 90 },
+  { month: 7, rate: 100 }
+];
 
 const loadPersistedArray = (key, fallback) => {
   if (typeof window === 'undefined') return fallback;
@@ -86,6 +95,36 @@ const getWeekEndDate = (weekStartDate) => {
   const end = new Date(weekStartDate.getFullYear(), weekStartDate.getMonth(), weekStartDate.getDate());
   end.setDate(end.getDate() + 6);
   return end;
+};
+
+const getMonthEndDate = (year, monthIndex) => new Date(year, monthIndex + 1, 0);
+
+const isSameDate = (leftDate, rightDate) => (
+  leftDate.getFullYear() === rightDate.getFullYear() &&
+  leftDate.getMonth() === rightDate.getMonth() &&
+  leftDate.getDate() === rightDate.getDate()
+);
+
+const getInterpolatedPlanRate = (targetDate, planAnchors) => {
+  const targetTimestamp = targetDate.getTime();
+
+  if (targetTimestamp <= planAnchors[0].timestamp) {
+    return planAnchors[0].rate;
+  }
+
+  for (let i = 1; i < planAnchors.length; i += 1) {
+    const previousAnchor = planAnchors[i - 1];
+    const currentAnchor = planAnchors[i];
+
+    if (targetTimestamp <= currentAnchor.timestamp) {
+      const span = currentAnchor.timestamp - previousAnchor.timestamp;
+      const progress = span === 0 ? 0 : (targetTimestamp - previousAnchor.timestamp) / span;
+      const rateValue = previousAnchor.rate + (currentAnchor.rate - previousAnchor.rate) * progress;
+      return Number(rateValue.toFixed(1));
+    }
+  }
+
+  return planAnchors[planAnchors.length - 1].rate;
 };
 
 const parseReportDate = (dateStr) => {
@@ -199,7 +238,7 @@ const CustomTooltip = ({ active, payload, label }) => {
 export default function App() {
   const [planData, setPlanData] = useState(() => loadPersistedArray(STORAGE_KEYS.planData, defaultPlanData));
   const [dateData, setDateData] = useState(() => loadPersistedArray(STORAGE_KEYS.dateData, defaultDateData));
-  const [isUploading, setIsUploading] = useState(false);
+  const [, setIsUploading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
@@ -275,8 +314,10 @@ export default function App() {
 
   // 处理文件上传
   const handleFileUpload = (e, type) => {
-    const file = e.target.files[0];
+    const input = e.currentTarget;
+    const file = input.files?.[0];
     if (!file) return;
+    input.value = '';
 
     setIsUploading(true);
     const reader = new FileReader();
@@ -309,6 +350,22 @@ export default function App() {
 
   // 数据计算逻辑
   const dashboardData = useMemo(() => {
+    const planProgressAnchors = [
+      {
+        dateObj: new Date(DASHBOARD_YEAR, 2, 1),
+        timestamp: new Date(DASHBOARD_YEAR, 2, 1).getTime(),
+        rate: 0
+      },
+      ...PLAN_PROGRESS_MILESTONES.map(({ month, rate }) => {
+        const dateObj = getMonthEndDate(DASHBOARD_YEAR, month);
+        return {
+          dateObj,
+          timestamp: dateObj.getTime(),
+          rate
+        };
+      })
+    ];
+
     // 1. 基础统计
     let totalPlanned = 0;
     const branchStatsMap = {};
@@ -328,34 +385,28 @@ export default function App() {
 
     // 过滤掉没有日期的脏数据
     const validDateData = dateData.filter(d => d['上报日期'] && d['上报日期'].trim() !== '');
-
-    // 按日期排序用于明细表
-    const sortedDateData = [...validDateData].sort((a, b) => {
-      const dateA = parseReportDate(a['上报日期']);
-      const dateB = parseReportDate(b['上报日期']);
-      const timeA = dateA ? dateA.getTime() : -Infinity;
-      const timeB = dateB ? dateB.getTime() : -Infinity;
-      return timeB - timeA;
-    });
+    const validDatedRows = validDateData
+      .map(row => {
+        const reportDate = parseReportDate(row['上报日期']);
+        return reportDate ? { ...row, reportDate } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.reportDate.getTime() - b.reportDate.getTime());
 
     validDateData.forEach(row => {
       const branch = row['机构名称'];
-      const dateStr = row['上报日期'];
 
       if (branch && branchStatsMap[branch]) {
         branchStatsMap[branch].actual += 1;
         totalActual += 1;
       }
+    });
 
+    validDatedRows.forEach(({ reportDate }) => {
       // 趋势统计按“周”聚合，周一到周日
-      if (dateStr) {
-        const reportDate = parseReportDate(dateStr);
-        if (reportDate) {
-          const weekStart = getWeekStartDate(reportDate);
-          const weekKey = toDateKey(weekStart);
-          weeklyTrendMap[weekKey] = (weeklyTrendMap[weekKey] || 0) + 1;
-        }
-      }
+      const weekStart = getWeekStartDate(reportDate);
+      const weekKey = toDateKey(weekStart);
+      weeklyTrendMap[weekKey] = (weeklyTrendMap[weekKey] || 0) + 1;
     });
 
     // 计算各机构完成率
@@ -389,6 +440,50 @@ export default function App() {
 
     // 计算整体完成率
     const totalRate = totalPlanned > 0 ? ((totalActual / totalPlanned) * 100).toFixed(1) : 0;
+    const latestReportDate = validDatedRows.length > 0 ? validDatedRows[validDatedRows.length - 1].reportDate : null;
+    const currentPlanRate = latestReportDate
+      ? getInterpolatedPlanRate(latestReportDate, planProgressAnchors)
+      : 0;
+    const isOnSchedule = Number(totalRate) >= currentPlanRate;
+    const timelineDates = [
+      planProgressAnchors[0].dateObj,
+      ...planProgressAnchors.slice(1).map(anchor => anchor.dateObj)
+    ];
+
+    if (latestReportDate && !timelineDates.some(dateObj => isSameDate(dateObj, latestReportDate))) {
+      timelineDates.push(latestReportDate);
+    }
+
+    timelineDates.sort((a, b) => a.getTime() - b.getTime());
+
+    let cumulativeActualCount = 0;
+    let actualIndex = 0;
+
+    const progressTimeline = timelineDates.map(dateObj => {
+      const checkpointTime = dateObj.getTime();
+
+      while (
+        actualIndex < validDatedRows.length &&
+        validDatedRows[actualIndex].reportDate.getTime() <= checkpointTime
+      ) {
+        cumulativeActualCount += 1;
+        actualIndex += 1;
+      }
+
+      const actualRateValue = totalPlanned > 0 ? (cumulativeActualCount / totalPlanned) * 100 : 0;
+      const shouldShowActualRate = !latestReportDate || checkpointTime <= latestReportDate.getTime();
+
+      return {
+        date: toDateKey(dateObj),
+        timestamp: checkpointTime,
+        planRate: getInterpolatedPlanRate(dateObj, planProgressAnchors),
+        actualRate: shouldShowActualRate ? Number(actualRateValue.toFixed(1)) : null
+      };
+    });
+
+    const progressTicks = progressTimeline
+      .filter(item => item.planRate > 0 || item.actualRate > 0 || item.timestamp === latestReportDate?.getTime())
+      .map(item => item.timestamp);
 
     return {
       totalPlanned,
@@ -397,11 +492,15 @@ export default function App() {
       branchStats,
       weeklyTrend,
       monthTicks,
-      recentReports: sortedDateData
+      progressTimeline,
+      progressTicks,
+      progressAsOf: latestReportDate ? toDateKey(latestReportDate) : '暂无有效上报日期',
+      isOnSchedule
     };
   }, [planData, dateData]);
 
-  const { totalPlanned, totalActual, totalRate, branchStats, weeklyTrend, monthTicks, recentReports } = dashboardData;
+  const { totalPlanned, totalActual, totalRate, branchStats, weeklyTrend, monthTicks, progressTimeline, progressTicks, progressAsOf, isOnSchedule } = dashboardData;
+  const totalRateColorClass = isOnSchedule ? 'text-emerald-600' : 'text-rose-600';
 
   return (
     <div id="dashboard-export-area" className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-800">
@@ -503,7 +602,7 @@ export default function App() {
             <div>
               <p className="text-sm font-medium text-slate-500">整体完成进度</p>
               <div className="flex items-baseline gap-2">
-                <h3 className="text-3xl font-bold text-slate-900">{totalRate}%</h3>
+                <h3 className={`text-3xl font-bold ${totalRateColorClass}`}>{totalRate}%</h3>
               </div>
             </div>
           </div>
@@ -571,7 +670,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* 底部区：趋势与明细 */}
+        {/* 底部区：趋势与计划 */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
           {/* 上报趋势 - 面积折线图 */}
@@ -619,49 +718,73 @@ export default function App() {
             </div>
           </div>
 
-          {/* 最新上报明细表 */}
+          {/* 时序计划完成情况 */}
           <div className="bg-white rounded-2xl p-6 border border-slate-100 shadow-[0_10px_26px_rgba(15,23,42,0.07)] transition-shadow duration-300 hover:shadow-[0_16px_34px_rgba(15,23,42,0.11)] flex flex-col h-[350px]">
-            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2 mb-4 shrink-0">
-              <FileSpreadsheet className="text-blue-500" size={20} />
-              近期客户上报明细
-            </h3>
-            <div className="overflow-auto flex-1 rounded-lg border border-slate-200">
-              <table className="w-full text-sm text-left">
-                <thead className="text-xs text-slate-500 bg-slate-50 sticky top-0 z-10">
-                  <tr>
-                    <th className="px-4 py-3 font-medium">上报日期</th>
-                    <th className="px-4 py-3 font-medium">机构名称</th>
-                    <th className="px-4 py-3 font-medium">客户名称</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {recentReports.slice(0, 50).map((row, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-4 py-3 text-slate-600 font-medium">
-                        <div className="flex items-center gap-2">
-                          <Calendar size={14} className="text-slate-400"/>
-                          {row['上报日期']}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="bg-blue-50 text-blue-700 px-2.5 py-1 rounded-md text-xs font-medium">
-                          {row['机构名称']}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-slate-800 truncate max-w-[150px]" title={row['客户名称']}>
-                        {row['客户名称']}
-                      </td>
-                    </tr>
-                  ))}
-                  {recentReports.length === 0 && (
-                    <tr>
-                      <td colSpan="3" className="px-4 py-8 text-center text-slate-400">
-                        暂无数据，请上传 date.csv
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+            <div className="flex items-start justify-between gap-3 mb-4 shrink-0">
+              <div>
+                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <Calendar className="text-blue-500" size={20} />
+                  时序计划完成情况
+                </h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  统计截至：{progressAsOf}
+                </p>
+              </div>
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                累计完成率
+              </span>
+            </div>
+            <div className="flex-1 rounded-lg border border-slate-200 p-3">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={progressTimeline} margin={{ top: 10, right: 20, left: -10, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                  <XAxis
+                    dataKey="timestamp"
+                    type="number"
+                    domain={['dataMin', 'dataMax']}
+                    ticks={progressTicks}
+                    tickFormatter={(value) => {
+                      const dateObj = new Date(value);
+                      const monthEndDate = getMonthEndDate(dateObj.getFullYear(), dateObj.getMonth());
+                      return isSameDate(dateObj, monthEndDate)
+                        ? `${dateObj.getMonth() + 1}月`
+                        : `${dateObj.getMonth() + 1}/${dateObj.getDate()}`;
+                    }}
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: '#64748b' }}
+                    dy={10}
+                  />
+                  <YAxis
+                    domain={[0, 100]}
+                    tickFormatter={(value) => `${value}%`}
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: '#64748b' }}
+                  />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Legend wrapperStyle={{ paddingTop: '16px' }} />
+                  <Line
+                    type="monotone"
+                    dataKey="planRate"
+                    name="计划完成率"
+                    stroke="#f59e0b"
+                    strokeWidth={3}
+                    strokeDasharray="6 4"
+                    dot={{ r: 3, fill: '#fff', stroke: '#f59e0b', strokeWidth: 2 }}
+                    activeDot={{ r: 5 }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="actualRate"
+                    name="实际完成率"
+                    stroke="#2563eb"
+                    strokeWidth={3}
+                    dot={{ r: 4, fill: '#fff', stroke: '#2563eb', strokeWidth: 2 }}
+                    activeDot={{ r: 6 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </div>
 
