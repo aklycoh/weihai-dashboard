@@ -57,10 +57,10 @@ const STORAGE_KEYS = {
 const DASHBOARD_YEAR = 2026;
 const PLAN_PROGRESS_MILESTONES = [
   { month: 2, rate: 10 },
-  { month: 3, rate: 20 },
-  { month: 4, rate: 40 },
-  { month: 5, rate: 60 },
-  { month: 6, rate: 90 },
+  { month: 3, rate: 30 },
+  { month: 4, rate: 50 },
+  { month: 5, rate: 70 },
+  { month: 6, rate: 85 },
   { month: 7, rate: 100 }
 ];
 
@@ -736,7 +736,7 @@ export default function App() {
             </div>
             <div className="flex-1 rounded-lg border border-slate-200 p-3">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={progressTimeline} margin={{ top: 10, right: 20, left: -10, bottom: 5 }}>
+                <LineChart data={progressTimeline} margin={{ top: 16, right: 20, left: 12, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                   <XAxis
                     dataKey="timestamp"
@@ -760,6 +760,8 @@ export default function App() {
                     tickFormatter={(value) => `${value}%`}
                     axisLine={false}
                     tickLine={false}
+                    tickMargin={8}
+                    width={64}
                     tick={{ fill: '#64748b' }}
                   />
                   <Tooltip content={<CustomTooltip />} />
