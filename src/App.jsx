@@ -159,6 +159,12 @@ const parseReportDate = (dateStr) => {
   return Number.isNaN(fallback.getTime()) ? null : fallback;
 };
 
+const waitForNextPaint = () => new Promise((resolve) => {
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(resolve);
+  });
+});
+
 // 升级版 CSV 解析器：完美处理带引号和内部标点的复杂字段
 const parseCSV = (csvText) => {
   const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== '');
@@ -260,10 +266,15 @@ export default function App() {
     });
   };
 
+  const prepareExport = async () => {
+    setIsExporting(true);
+    await waitForNextPaint();
+  };
+
   // 导出为 PNG
   const exportToPNG = async () => {
     try {
-      setIsExporting(true);
+      await prepareExport();
       const canvas = await captureElement();
       const link = document.createElement('a');
       link.download = `威海分行授信上报仪表盘_${new Date().toISOString().slice(0,10)}.png`;
@@ -279,7 +290,7 @@ export default function App() {
   // 导出为 PDF（支持多页）
   const exportToPDF = async () => {
     try {
-      setIsExporting(true);
+      await prepareExport();
       const [canvas, { jsPDF }] = await Promise.all([
         captureElement(),
         import('jspdf')
@@ -501,6 +512,7 @@ export default function App() {
 
   const { totalPlanned, totalActual, totalRate, branchStats, weeklyTrend, monthTicks, progressTimeline, progressTicks, progressAsOf, isOnSchedule } = dashboardData;
   const totalRateColorClass = isOnSchedule ? 'text-emerald-600' : 'text-rose-600';
+  const shouldAnimateCharts = !isExporting;
 
   return (
     <div id="dashboard-export-area" className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-800">
@@ -628,9 +640,9 @@ export default function App() {
                   <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fill: '#64748b' }} tickFormatter={(val) => `${val}%`} />
                   <Tooltip content={<CustomTooltip />} cursor={{ fill: '#f1f5f9' }} />
                   <Legend wrapperStyle={{ paddingTop: '20px' }} />
-                  <Bar yAxisId="left" dataKey="planned" name="应上报任务" fill="#94a3b8" radius={[4, 4, 0, 0]} barSize={32} />
-                  <Bar yAxisId="left" dataKey="actual" name="实际上报数" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={32} />
-                  <Line yAxisId="right" type="monotone" dataKey="rate" name="完成比例" stroke="#f59e0b" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} />
+                  <Bar yAxisId="left" dataKey="planned" name="应上报任务" fill="#94a3b8" radius={[4, 4, 0, 0]} barSize={32} isAnimationActive={shouldAnimateCharts} />
+                  <Bar yAxisId="left" dataKey="actual" name="实际上报数" fill="#3b82f6" radius={[4, 4, 0, 0]} barSize={32} isAnimationActive={shouldAnimateCharts} />
+                  <Line yAxisId="right" type="monotone" dataKey="rate" name="完成比例" stroke="#f59e0b" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} isAnimationActive={shouldAnimateCharts} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
@@ -658,6 +670,7 @@ export default function App() {
                     nameKey="branch"
                     label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
                     labelLine={true}
+                    isAnimationActive={shouldAnimateCharts}
                   >
                     {branchStats.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -712,6 +725,7 @@ export default function App() {
                     fill="url(#colorCount)"
                     dot={{ r: 4, fill: '#fff', stroke: '#10b981', strokeWidth: 2 }}
                     activeDot={{ r: 6 }}
+                    isAnimationActive={shouldAnimateCharts}
                   />
                 </AreaChart>
               </ResponsiveContainer>
@@ -775,6 +789,7 @@ export default function App() {
                     strokeDasharray="6 4"
                     dot={{ r: 3, fill: '#fff', stroke: '#f59e0b', strokeWidth: 2 }}
                     activeDot={{ r: 5 }}
+                    isAnimationActive={shouldAnimateCharts}
                   />
                   <Line
                     type="monotone"
@@ -784,6 +799,7 @@ export default function App() {
                     strokeWidth={3}
                     dot={{ r: 4, fill: '#fff', stroke: '#2563eb', strokeWidth: 2 }}
                     activeDot={{ r: 6 }}
+                    isAnimationActive={shouldAnimateCharts}
                   />
                 </LineChart>
               </ResponsiveContainer>
